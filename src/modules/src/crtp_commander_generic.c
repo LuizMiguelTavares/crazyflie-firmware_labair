@@ -75,6 +75,7 @@ enum packet_type {
   zDistanceType           = 9,
   hoverType               = 10,
   manualType              = 11,
+  accType                 = 12,
 };
 
 /* ---===== 2 - Decoding functions =====--- */
@@ -521,6 +522,61 @@ static void positionDecoder(setpoint_t *setpoint, uint8_t type, const void *data
   setpoint->attitude.yaw = values->yaw;
 }
 
+#define MIN_THRUST  1000
+#define MAX_THRUST  60000
+
+// ################################ EDITED(EXTENDED) PART##################################
+/* accDecoder
+ * Set the Crazyflie acceleration reference in the body coordinate system
+ */
+struct accPacket_s {
+  float roll;       // deg
+  float pitch;      // deg
+  float yaw;        // deg
+  uint16_t thrust;
+  float ax;        // reference m/s^2 in the body frame of reference
+  float ay;        // ...
+  float az;        // ...
+
+} __attribute__((packed));
+static void accDecoder(setpoint_t *setpoint, uint8_t type, const void *data, size_t datalen)
+{const struct accPacket_s *values = data;
+
+  ASSERT(datalen == sizeof(struct accPacket_s));
+
+  setpoint->acceleration.x = values->ax;
+  setpoint->acceleration.y = values->ay;
+  setpoint->acceleration.z = values->az;
+
+  // Thrust
+  uint16_t rawThrust = values->thrust;
+
+  if  (rawThrust < MIN_THRUST) {
+    setpoint->thrust = 0;
+  } else {
+    setpoint->thrust = fminf(rawThrust, MAX_THRUST);
+  }
+ 
+  setpoint->mode.x = modeDisable;
+  setpoint->mode.y = modeDisable;
+  setpoint->mode.z = modeDisable;
+
+  setpoint->mode.roll = modeVelocity;
+  setpoint->attitudeRate.roll = values->roll;
+  setpoint->attitude.roll = 0;
+
+  setpoint->mode.pitch = modeVelocity;
+  setpoint->attitudeRate.pitch = values->pitch;
+  setpoint->attitude.pitch = 0;
+
+  setpoint->velocity.x = 0;
+  setpoint->velocity.y = 0;
+
+  setpoint->attitudeRate.yaw = -values->yaw;
+
+  setpoint->mode.yaw = modeVelocity;
+}
+
  /* ---===== 3 - packetDecoders array =====--- */
 const static packetDecoder_t packetDecoders[] = {
   [stopType]                = stopDecoder,
@@ -535,6 +591,7 @@ const static packetDecoder_t packetDecoders[] = {
   [zDistanceType]           = zDistanceDecoder,
   [hoverType]               = hoverDecoder,
   [manualType]              = manualDecoder,
+  [accType]                 = accDecoder,
 };
 
 /* Decoder switch */

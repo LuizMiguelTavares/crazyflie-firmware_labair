@@ -169,3 +169,22 @@
 #define PID_POS_VEL_Y_MAX 1.0f
 #define PID_POS_VEL_Z_MAX 1.0f
 
+// SMC
+
+# define SMC_ROLL_K       1.0f
+# define SMC_ROLL_LAMBDA  1.0f
+# define SMC_ROLL_SIGMA   1.0f
+# define SMC_ROLL_KI      1.0f
+# define SMC_ROLL_DELTA   1.0f
+
+# define SMC_PITCH_K      1.0f
+# define SMC_PITCH_LAMBDA 1.0f
+# define SMC_PITCH_SIGMA  1.0f
+# define SMC_PITCH_KI     1.0f
+# define SMC_PITCH_DELTA  1.0f
+
+# define SMC_YAW_K      1.0f
+# define SMC_YAW_LAMBDA 1.0f
+# define SMC_YAW_SIGMA  1.0f
+# define SMC_YAW_KI     1.0f
+# define SMC_YAW_DELTA  1.0f

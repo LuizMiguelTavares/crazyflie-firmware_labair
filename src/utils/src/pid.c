@@ -55,6 +55,209 @@ void pidInit(PidObject* pid, const float desired, const float kp,
   }
 }
 
+void smcInit(PidObject* pid, const float k_smc, const float lambda_smc,
+             const float sigma_smc, const float ki_smc, const float delta_smc, const int axis_smc)
+{
+  pid->smc.k_smc = k_smc;
+  pid->smc.lambda_smc = lambda_smc;
+  pid->smc.sigma_smc = sigma_smc;
+  pid->smc.ki_smc = ki_smc;
+  pid->smc.delta_smc = delta_smc;
+  pid->smc.axis = axis_smc;
+}
+
+float pidUpdateSMC(PidObject* pid, const float measured, const bool isYawAngle, const setpoint_t *setpoint, const state_t *state)
+{
+  float output = 0.0f;
+
+  pid->error = pid->desired - measured;
+  
+  if (isYawAngle){
+    if (pid->error > 180.0f){
+      pid->error -= 360.0f;
+    } else if (pid->error < -180.0f){
+      pid->error += 360.0f;
+    }
+  }
+  
+  pid->outP = pid->kp * pid->error;
+  output += pid->outP;
+
+  /*
+  * Note: The derivative term in this PID controller is implemented based on the
+  * derivative of the measured process variable instead of the error.
+  * This approach avoids derivative kick, which can occur due to sudden changes
+  * in the setpoint. By using the process variable for the derivative calculation, we achieve
+  * smoother and more stable control during setpoint changes.
+  */
+  float delta = -(measured - pid->prevMeasured);
+
+  // For yaw measurements, take care of spikes when crossing 180deg <-> -180deg  
+  if (isYawAngle){
+    if (delta > 180.0f){
+      delta -= 360.0f;
+    } else if (delta < -180.0f){
+      delta += 360.0f;
+    }
+  }
+  
+  #if CONFIG_CONTROLLER_PID_FILTER_ALL
+    pid->deriv = delta / pid->dt;
+  #else
+    if (pid->enableDFilter){
+      pid->deriv = lpf2pApply(&pid->dFilter, delta / pid->dt);
+    } else {
+      pid->deriv = delta / pid->dt;
+    }
+  #endif
+  if (isnan(pid->deriv)) {
+    pid->deriv = 0;
+  }
+  pid->outD = pid->kd * pid->deriv;
+  output += pid->outD;
+
+  pid->integ += pid->error * pid->dt;
+
+  // Constrain the integral (unless the iLimit is zero)
+  if(pid->iLimit != 0)
+  {
+    pid->integ = constrain(pid->integ, -pid->iLimit, pid->iLimit);
+  }
+
+  pid->outI = pid->ki * pid->integ;
+  //output += pid->outI;
+
+  pid->outFF = pid->kff * pid->desired;
+  output += pid->outFF;
+
+
+  // SMC part
+  float lambda_smc = pid->smc.lambda_smc;
+  float sigma_smc = pid->smc.sigma_smc;
+
+  float ew, er;
+
+  float deg2rad = 0.01745329251;
+
+  ew = pid->error*deg2rad;
+
+  float phi = state->attitude.roll*deg2rad;    // phi
+  float theta = -state->attitude.pitch*deg2rad; // theta
+  float psi = state->attitude.yaw*deg2rad;     // psi
+
+  float ddxref =  setpoint->acceleration.x;
+  float ddyref =  setpoint->acceleration.y;
+  float ddzref =  setpoint->acceleration.z;
+
+  float gv = 9.80665f;
+  float thrust_raw = (ddzref + gv)/(cosf(theta)*cosf(phi));
+  float R13d = ddxref/thrust_raw;
+  float R23d = ddyref/thrust_raw;
+
+  float psid =  0.0f; // TODO Ainda não implementado
+
+  float R11 = cosf(theta)*cosf(psi);
+  float R12 = sinf(phi)*sinf(theta)*cosf(psi) - cosf(phi)*sinf(psi);
+  float R13 = sinf(phi)*sinf(psi) + cosf(phi)*sinf(theta)*cosf(psi);
+  float R21 = cosf(theta)*sinf(psi);
+  float R22 = cosf(phi)*cosf(psi) + sinf(phi)*sinf(theta)*sinf(psi);
+  float R23 = cosf(phi)*sinf(theta)*sinf(psi) - sinf(phi)*cosf(psi);
+  float R33 = cosf(phi)*cosf(theta);
+
+  float R13_error = R13d - R13;
+  float R23_error = R23d - R23;
+
+  float er_phi = (R13_error*R21 + R23_error*(-R11))/R33;
+  float er_theta = (R13_error*R22 + R23_error*(-R12))/R33;
+  float er_psi = psid - psi;
+
+  if (pid->smc.axis == 1) {
+    er = er_phi;
+  } else if (pid->smc.axis == 2) {
+    er = er_theta;
+  } else if (pid->smc.axis == 3) {
+    er = er_psi;
+  } else {
+    er = 0;
+  }
+
+  float s_smc = ew + 0*lambda_smc*er;
+  pid->smc.s_smc = s_smc;
+
+  // Saturation
+  float s_smc_sat;
+
+  if (s_smc/sigma_smc < -1.0f) {
+   s_smc_sat = -1.0f;
+  } else if(s_smc/sigma_smc > 1.0f) {
+   s_smc_sat = 1.0f;
+  } else {
+   s_smc_sat = s_smc/sigma_smc;
+  }
+
+  // if (s_smc < 0.0f) {
+  //   s_smc_sat = -1.0f;
+  // } else {
+  //   s_smc_sat = 1.0f;
+  // }
+
+  //if (pid->smc.axis == 2) {
+  //  s_smc_sat = -s_smc_sat;
+  //} 
+
+  if (pid->smc.axis == 3) {
+    s_smc_sat = 0.0f;
+  }
+
+
+  float dk_smc, s_delta, s_delta_sat;
+  s_delta = fabsf(s_smc) - pid->smc.delta_smc;
+
+  if (s_delta < 0.0f) {
+    s_delta_sat = -1.0f;
+  } else {
+    s_delta_sat = 1.0f;
+  }
+
+  dk_smc = pid->smc.ki_smc * fabsf(s_smc) * s_delta_sat;
+  pid->smc.k_smc += dk_smc * pid->dt;
+
+  if (pid->smc.k_smc < 0){
+    pid->smc.k_smc = 0;
+  } else if (pid->smc.k_smc > 20000){
+    pid->smc.k_smc = 20000;
+  }
+
+  pid->smc.outSMC = pid->smc.k_smc*s_smc_sat;
+  pid->smc.outPID = output;
+
+  output += pid->smc.outSMC;
+  
+  #if CONFIG_CONTROLLER_PID_FILTER_ALL
+    //filter complete output instead of only D component to compensate for increased noise from increased barometer influence
+    if (pid->enableDFilter)
+    {
+      output = lpf2pApply(&pid->dFilter, output);
+    }
+    else {
+      output = output;
+    }
+    if (isnan(output)) {
+      output = 0;
+    }
+  #endif
+
+  // Constrain the total PID output (unless the outputLimit is zero)
+  if(pid->outputLimit != 0)
+  {
+    output = constrain(output, -pid->outputLimit, pid->outputLimit);
+  }
+
+  pid->prevMeasured = measured;
+
+  return output;
+}
+
 float pidUpdate(PidObject* pid, const float measured, const bool isYawAngle)
 {
   float output = 0.0f;
@@ -71,6 +274,8 @@ float pidUpdate(PidObject* pid, const float measured, const bool isYawAngle)
   
   pid->outP = pid->kp * pid->error;
   output += pid->outP;
+
+  pid->smc.outSMC = 0.0f;
 
   /*
   * Note: The derivative term in this PID controller is implemented based on the

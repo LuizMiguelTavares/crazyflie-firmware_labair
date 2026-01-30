@@ -54,6 +54,14 @@ void attitudeControllerCorrectRatePID(
        float rollRateDesired, float pitchRateDesired, float yawRateDesired);
 
 /**
+ * Make the controller run an update of the rate PID SMC. The output is
+ * the actuator force.
+ */
+void attitudeControllerCorrectRatePIDSMC(
+       float rollRateActual, float pitchRateActual, float yawRateActual,
+       float rollRateDesired, float pitchRateDesired, float yawRateDesired, const setpoint_t *setpoint, const state_t *state);
+
+/**
  * Reset controller roll attitude PID
  */
 void attitudeControllerResetRollAttitudePID(float rollActual);

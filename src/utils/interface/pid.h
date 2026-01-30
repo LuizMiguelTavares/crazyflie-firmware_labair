@@ -29,10 +29,23 @@
 
 #include <stdbool.h>
 #include "filter.h"
+#include "stabilizer_types.h"
 
 #define DEFAULT_PID_INTEGRATION_LIMIT 5000.0
 #define DEFAULT_PID_OUTPUT_LIMIT      0.0
 
+typedef struct
+{
+  float k_smc;
+  float lambda_smc;
+  float sigma_smc;
+  float outSMC;
+  int axis;
+  float outPID;
+  float s_smc;
+  float ki_smc;
+  float delta_smc;
+} SMC;
 
 typedef struct
 {
@@ -54,6 +67,7 @@ typedef struct
   float dt;           //< delta-time dt
   lpf2pData dFilter;  //< filter for D term
   bool enableDFilter; //< filter for D term enable flag
+  SMC smc;
 } PidObject;
 
 /**
@@ -74,6 +88,19 @@ typedef struct
               const float ki, const float kd, const float kff, const float dt,
               const float samplingRate, const float cutoffFreq,
               bool enableDFilter);
+
+/**
+ * PID object initialization.
+ *
+ * @param[out] pid   A pointer to the pid object to initialize.
+ * @param[in] k_smc Uncertainty magnitude gain
+ * @param[in] lambda_smc  Sliding surface gain
+ * @param[in] sigma_smc   Boundary layer size
+ * @param[in] ki_smc   Adaptive SMC gain
+ * @param[in] delta_smc   Adaptive SMC gain
+ */
+void smcInit(PidObject* pid, const float k_smc, const float lambda_smc,
+             const float sigma_smc, const float ki_smc, const float delta_smc, const int axis_smc);
 
 /**
  * Set the integral limit for this PID in deg.
@@ -100,6 +127,17 @@ void pidReset(PidObject* pid, float initial);
  * @return PID algorithm output
  */
 float pidUpdate(PidObject* pid, const float measured, const bool isYawAngle);
+
+/**
+ * Update the PID parameters with sliding mode control.
+ *
+ * @param[in] pid         A pointer to the pid object.
+ * @param[in] measured    The measured value
+ * @param[in] isYawAngle  Set to TRUE if it is a PID on yaw angle, set to false otherwise
+ * @return PID algorithm output
+ */
+float pidUpdateSMC(PidObject* pid, const float measured, const bool isYawAngle, const setpoint_t *setpoint, const state_t *state);
+
 
 /**
  * Set a new set point for the PID to track.

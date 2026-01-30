@@ -9,6 +9,8 @@
 #include "param.h"
 #include "math3d.h"
 
+#include "usec_time.h"
+
 #define ATTITUDE_UPDATE_DT    (float)(1.0f/ATTITUDE_RATE)
 
 static attitude_t attitudeDesired;
@@ -23,6 +25,44 @@ static float r_roll;
 static float r_pitch;
 static float r_yaw;
 static float accelz;
+
+static float control_dt_us = 0.0f;
+
+static uint8_t useSMC = 0;
+static float k_phi = 50.0f;
+static float k_theta = 50.0f;
+static float k_psi = 12.5f;
+
+static float sat_roll = 5.0f;
+static float sat_pitch = 5.0f;
+static float sat_yaw = 3.0f;
+
+static float er_phi = 0.0f;
+static float er_theta = 0.0f;
+static float er_psi = 0.0f;
+
+#define MA_N 10
+static float rb_phi[MA_N]   = {0};
+static float rb_theta[MA_N] = {0};
+static float rb_psi[MA_N]   = {0};
+static uint8_t rb_k = 0;    
+static uint8_t rb_fill = 0;
+
+static float phi_filt;
+static float theta_filt;
+static float psi_filt;
+
+static float psi_prev = 0.0f;
+static float psi_unwrapped = 0.0f;
+static uint8_t psi_init = 0;
+
+#ifndef PI_
+#define PI_ 3.14159265358979323846f
+#endif
+
+static float deg2rad = 0.01745329251f;
+static float rad2deg = 57.2958f;
+static float gv = 9.80665f;
 
 void controllerPidInit(void)
 {
@@ -59,6 +99,30 @@ void controllerPid(control_t *control, const setpoint_t *setpoint,
                                          const stabilizerStep_t stabilizerStep)
 {
   control->controlMode = controlModeLegacy;
+  rb_phi[rb_k]   = state->attitude.roll * deg2rad;
+  rb_theta[rb_k] = -state->attitude.pitch * deg2rad;
+
+  float psi_wrapped = state->attitude.yaw * deg2rad;
+
+  if (!psi_init) {
+    psi_init = 1;
+    psi_prev = psi_wrapped;
+    psi_unwrapped = psi_wrapped;
+  } else {
+    float d = psi_wrapped - psi_prev;
+
+    if (d >  PI_) d -= 2.0f * PI_;
+    if (d < -PI_) d += 2.0f * PI_;
+
+    psi_unwrapped += d;
+    psi_prev = psi_wrapped;
+  }
+
+  rb_psi[rb_k] = psi_unwrapped;
+
+  rb_k++;
+  if (rb_k >= MA_N) rb_k = 0;
+  if (rb_fill < MA_N) rb_fill++;
 
   if (RATE_DO_EXECUTE(ATTITUDE_RATE, stabilizerStep)) {
     // Rate-controled YAW is moving YAW angle setpoint
@@ -90,12 +154,95 @@ void controllerPid(control_t *control, const setpoint_t *setpoint,
     attitudeDesired.yaw = capAngle(attitudeDesired.yaw);
   }
 
+  if (RATE_DO_EXECUTE(LABAIR_RATE, stabilizerStep)) {
+    if (useSMC==1) {
+      float ddxref =  setpoint->acceleration.x;
+      float ddyref =  setpoint->acceleration.y;
+      float ddzref =  setpoint->acceleration.z;
+
+      float sum_phi = 0.0f, sum_theta = 0.0f, sum_psi = 0.0f;
+      int n_ang = rb_fill;
+      
+      for (int i = 0; i < n_ang; i++) {
+        sum_phi   += rb_phi[i];
+        sum_theta += rb_theta[i];
+        sum_psi   += rb_psi[i];
+      }
+
+      rb_fill = 0;
+      rb_k = 0;
+
+      phi_filt   = sum_phi / (float)n_ang;
+      theta_filt = sum_theta / (float)n_ang;
+      psi_filt   = sum_psi / (float)n_ang;
+
+      while (psi_filt >  PI_) psi_filt -= 2.0f * PI_;
+      while (psi_filt < -PI_) psi_filt += 2.0f * PI_;
+
+      psi_init = 0;
+      psi_prev = 0.0f;
+      psi_unwrapped = 0.0f;
+
+      // float phi   = state->attitude.roll * deg2rad;
+      // float theta = -state->attitude.pitch * deg2rad;
+      // float psi   = state->attitude.yaw * deg2rad;
+
+      float phi   = phi_filt;
+      float theta = theta_filt;
+      float psi   = psi_filt;
+
+      float thrust_raw = (ddzref + gv)/(cosf(theta)*cosf(phi));
+      float R13d = ddxref/thrust_raw;
+      float R23d = ddyref/thrust_raw;
+
+      float R11 = cosf(theta)*cosf(psi);
+      float R12 = sinf(phi)*sinf(theta)*cosf(psi) - cosf(phi)*sinf(psi);
+      float R13 = sinf(phi)*sinf(psi) + cosf(phi)*sinf(theta)*cosf(psi);
+      float R21 = cosf(theta)*sinf(psi);
+      float R22 = cosf(phi)*cosf(psi) + sinf(phi)*sinf(theta)*sinf(psi);
+      float R23 = cosf(phi)*sinf(theta)*sinf(psi) - sinf(phi)*cosf(psi);
+      float R33 = cosf(phi)*cosf(theta);
+
+      float R13_error = k_phi*(R13d - R13);
+      float R23_error = k_theta*(R23d - R23);
+
+      er_phi = (R13_error*R21 + R23_error*(-R11))/R33;
+      er_theta = (R13_error*R22 + R23_error*(-R12))/R33;
+      er_psi = -sinf(phi)*sensors->gyro.y*deg2rad + R33*(k_psi*(0 - psi)); // Psi desejado está em 0!
+
+      if (er_phi > sat_roll) {
+        er_phi = sat_roll;
+      } else if (er_phi < -sat_roll) {
+        er_phi = -sat_roll;
+      }
+
+      if (er_theta > sat_pitch) {
+        er_theta = sat_pitch;
+      } else if (er_theta < -sat_pitch) {
+        er_theta = -sat_pitch;
+      }
+
+      if (er_psi > sat_yaw) {
+        er_psi = sat_yaw;
+      } else if (er_psi < -sat_yaw) {
+        er_psi = -sat_yaw;
+      }
+
+      er_phi = er_phi*rad2deg;
+      er_theta = er_theta*rad2deg;
+      er_psi = er_psi*rad2deg;
+    }
+  }
+
   if (RATE_DO_EXECUTE(POSITION_RATE, stabilizerStep)) {
     positionController(&actuatorThrust, &attitudeDesired, setpoint, state);
   }
 
   if (RATE_DO_EXECUTE(ATTITUDE_RATE, stabilizerStep)) {
+    uint32_t t0 = usecTimestamp();
+
     // Switch between manual and automatic position control
+
     if (setpoint->mode.z == modeDisable) {
       actuatorThrust = setpoint->thrust;
     }
@@ -121,8 +268,13 @@ void controllerPid(control_t *control, const setpoint_t *setpoint,
     }
 
     // TODO: Investigate possibility to subtract gyro drift.
-    attitudeControllerCorrectRatePID(sensors->gyro.x, -sensors->gyro.y, sensors->gyro.z,
-                             rateDesired.roll, rateDesired.pitch, rateDesired.yaw);
+    if (useSMC==0) {
+      attitudeControllerCorrectRatePID(sensors->gyro.x, -sensors->gyro.y, sensors->gyro.z,
+                            rateDesired.roll, rateDesired.pitch, rateDesired.yaw);
+    } else {
+      attitudeControllerCorrectRatePIDSMC(sensors->gyro.x, -sensors->gyro.y, sensors->gyro.z,
+                              er_phi, -er_theta, rateDesired.yaw, setpoint, state);
+    }
 
     attitudeControllerGetActuatorOutput(&control->roll,
                                         &control->pitch,
@@ -138,6 +290,11 @@ void controllerPid(control_t *control, const setpoint_t *setpoint,
     r_pitch = -radians(sensors->gyro.y);
     r_yaw = radians(sensors->gyro.z);
     accelz = sensors->acc.z;
+
+    uint32_t t1 = usecTimestamp();
+    const uint32_t dt_us = t1 - t0;
+
+    control_dt_us = (float)dt_us;  
   }
 
   control->thrust = actuatorThrust;
@@ -228,3 +385,38 @@ LOG_ADD(LOG_FLOAT, pitchRate, &rateDesired.pitch)
  */
 LOG_ADD(LOG_FLOAT, yawRate,   &rateDesired.yaw)
 LOG_GROUP_STOP(controller)
+
+LOG_GROUP_START(timeControl)
+LOG_ADD(LOG_FLOAT, control_us, &control_dt_us)
+LOG_GROUP_STOP(timeControl)
+
+LOG_GROUP_START(smc) //remove
+LOG_ADD(LOG_FLOAT, er_phi, &er_phi)
+LOG_ADD(LOG_FLOAT, er_theta, &er_theta)
+LOG_ADD(LOG_FLOAT, er_psi, &er_psi)
+
+LOG_ADD(LOG_FLOAT, phi_filt, &phi_filt)
+LOG_ADD(LOG_FLOAT, theta_filt, &theta_filt)
+LOG_ADD(LOG_FLOAT, psi_filt, &psi_filt)
+LOG_GROUP_STOP(smc)
+
+/**
+ * Tuning settings for the gains of the PID controller for the rate angles of
+ * the Crazyflie, which consists of the yaw, pitch and roll rates 
+ */
+PARAM_GROUP_START(smc)
+
+/**
+ * @brief Boudary layer for the SMC PID pitch rate controller
+ */
+PARAM_ADD(PARAM_UINT8, useSMC, &useSMC)
+
+PARAM_ADD(PARAM_FLOAT, k_phi, &k_phi)
+PARAM_ADD(PARAM_FLOAT, k_theta, &k_theta)
+PARAM_ADD(PARAM_FLOAT, k_psi, &k_psi)
+
+PARAM_ADD(PARAM_FLOAT, sat_roll, &sat_roll)
+PARAM_ADD(PARAM_FLOAT, sat_pitch, &sat_pitch)
+PARAM_ADD(PARAM_FLOAT, sat_yaw, &sat_yaw)
+
+PARAM_GROUP_STOP(smc)
