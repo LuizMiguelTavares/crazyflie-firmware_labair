@@ -30,6 +30,10 @@
 #include <math.h>
 #include <float.h>
 #include "autoconf.h"
+#include "param.h"
+
+static int8_t is_PD_ASMC = 1;
+static int8_t use_superTwist = 0;
 
 void pidInit(PidObject* pid, const float desired, const float kp,
              const float ki, const float kd, const float kff, const float dt,
@@ -56,13 +60,15 @@ void pidInit(PidObject* pid, const float desired, const float kp,
 }
 
 void smcInit(PidObject* pid, const float k_smc, const float lambda_smc,
-             const float sigma_smc, const float ki_smc, const float delta_smc, const int axis_smc)
+             const float sigma_smc, const float ki_smc, const float delta_smc, const float kj_smc, const float sigma_sdelta_smc, const int axis_smc)
 {
   pid->smc.k_smc = k_smc;
   pid->smc.lambda_smc = lambda_smc;
   pid->smc.sigma_smc = sigma_smc;
   pid->smc.ki_smc = ki_smc;
   pid->smc.delta_smc = delta_smc;
+  pid->smc.kj_smc = kj_smc;
+  pid->smc.sigma_sdelta_smc = sigma_sdelta_smc;
   pid->smc.axis = axis_smc;
 }
 
@@ -125,114 +131,167 @@ float pidUpdateSMC(PidObject* pid, const float measured, const bool isYawAngle, 
   }
 
   pid->outI = pid->ki * pid->integ;
-  //output += pid->outI;
+  if (!is_PD_ASMC){
+    output += pid->outI;
+  }
 
   pid->outFF = pid->kff * pid->desired;
   output += pid->outFF;
 
 
   // SMC part
-  float lambda_smc = pid->smc.lambda_smc;
-  float sigma_smc = pid->smc.sigma_smc;
+  if (setpoint->thrust > 12000){
+    float lambda_smc = pid->smc.lambda_smc;
+    float sigma_smc = pid->smc.sigma_smc;
 
-  float ew, er;
+    float ew, er;
 
-  float deg2rad = 0.01745329251;
+    float deg2rad = 0.01745329251;
 
-  ew = pid->error*deg2rad;
+    ew = pid->error*deg2rad;
 
-  float phi = state->attitude.roll*deg2rad;    // phi
-  float theta = -state->attitude.pitch*deg2rad; // theta
-  float psi = state->attitude.yaw*deg2rad;     // psi
+    float phi = state->attitude.roll*deg2rad;    // phi
+    float theta = -state->attitude.pitch*deg2rad; // theta
+    float psi = state->attitude.yaw*deg2rad;     // psi
 
-  float ddxref =  setpoint->acceleration.x;
-  float ddyref =  setpoint->acceleration.y;
-  float ddzref =  setpoint->acceleration.z;
+    float ddxref =  setpoint->acceleration.x;
+    float ddyref =  setpoint->acceleration.y;
+    float ddzref =  setpoint->acceleration.z;
 
-  float gv = 9.80665f;
-  float thrust_raw = (ddzref + gv)/(cosf(theta)*cosf(phi));
-  float R13d = ddxref/thrust_raw;
-  float R23d = ddyref/thrust_raw;
+    float gv = 9.80665f;
+    float thrust_raw = (ddzref + gv)/(cosf(theta)*cosf(phi));
+    float R13d = ddxref/thrust_raw;
+    float R23d = ddyref/thrust_raw;
 
-  float psid =  0.0f; // TODO Ainda não implementado
+    float psid =  0.0f; // TODO Ainda não implementado
 
-  float R11 = cosf(theta)*cosf(psi);
-  float R12 = sinf(phi)*sinf(theta)*cosf(psi) - cosf(phi)*sinf(psi);
-  float R13 = sinf(phi)*sinf(psi) + cosf(phi)*sinf(theta)*cosf(psi);
-  float R21 = cosf(theta)*sinf(psi);
-  float R22 = cosf(phi)*cosf(psi) + sinf(phi)*sinf(theta)*sinf(psi);
-  float R23 = cosf(phi)*sinf(theta)*sinf(psi) - sinf(phi)*cosf(psi);
-  float R33 = cosf(phi)*cosf(theta);
+    float R11 = cosf(theta)*cosf(psi);
+    float R12 = sinf(phi)*sinf(theta)*cosf(psi) - cosf(phi)*sinf(psi);
+    float R13 = sinf(phi)*sinf(psi) + cosf(phi)*sinf(theta)*cosf(psi);
+    float R21 = cosf(theta)*sinf(psi);
+    float R22 = cosf(phi)*cosf(psi) + sinf(phi)*sinf(theta)*sinf(psi);
+    float R23 = cosf(phi)*sinf(theta)*sinf(psi) - sinf(phi)*cosf(psi);
+    float R33 = cosf(phi)*cosf(theta);
 
-  float R13_error = R13d - R13;
-  float R23_error = R23d - R23;
+    float R13_error = R13d - R13;
+    float R23_error = R23d - R23;
 
-  float er_phi = (R13_error*R21 + R23_error*(-R11))/R33;
-  float er_theta = (R13_error*R22 + R23_error*(-R12))/R33;
-  float er_psi = psid - psi;
+    float er_phi = (R13_error*R21 + R23_error*(-R11))/R33;
+    float er_theta = (R13_error*R22 + R23_error*(-R12))/R33;
+    float er_psi = psid - psi;
 
-  if (pid->smc.axis == 1) {
-    er = er_phi;
-  } else if (pid->smc.axis == 2) {
-    er = er_theta;
-  } else if (pid->smc.axis == 3) {
-    er = er_psi;
-  } else {
-    er = 0;
+    if (pid->smc.axis == 1) {
+      er = er_phi;
+    } else if (pid->smc.axis == 2) {
+      er = er_theta;
+    } else if (pid->smc.axis == 3) {
+      er = er_psi;
+    } else {
+      er = 0;
+    }
+
+    float s_smc = ew + 0*lambda_smc*er;
+    pid->smc.s_smc = s_smc;
+
+    // Saturation
+    float s_smc_sat;
+
+    if (s_smc/sigma_smc < -1.0f) {
+    s_smc_sat = -1.0f;
+    } else if(s_smc/sigma_smc > 1.0f) {
+    s_smc_sat = 1.0f;
+    } else {
+    s_smc_sat = s_smc/sigma_smc;
+    }
+
+    // if (s_smc < 0.0f) {
+    //   s_smc_sat = -1.0f;
+    // } else {
+    //   s_smc_sat = 1.0f;
+    // }
+
+
+    if (pid->smc.axis == 3) {
+      s_smc_sat = 0.0f;
+    }
+
+    float dk_smc, s_minus_delta, s_minus_delta_sat;
+    s_minus_delta = fabsf(s_smc) - pid->smc.delta_smc;
+
+    if (s_minus_delta < 0.0f) {
+      s_minus_delta_sat = -1.0f;
+    } else {
+      s_minus_delta_sat = 1.0f;
+    }
+
+    // Saturation Sdelta
+    float s_delta_smc_sat;
+
+    float sigma_sdelta_smc = pid->smc.sigma_sdelta_smc;
+
+    if (s_smc/(sigma_sdelta_smc) < -1.0f) {
+    s_delta_smc_sat = -1.0f;
+    } else if(s_smc/(sigma_sdelta_smc) > 1.0f) {
+    s_delta_smc_sat = 1.0f;
+    } else {
+    s_delta_smc_sat = s_smc/(sigma_sdelta_smc);
+    }
+
+    float s_delta, s_delta_sat;
+    s_delta = s_smc - sigma_sdelta_smc*s_delta_smc_sat;
+    // s_delta = s_smc;
+
+    if (s_delta > 0.001f) {
+      s_delta_sat = 1.0f;
+    } else if (s_delta < -0.001f) {
+      s_delta_sat = -1.0f;
+    } else {
+      s_delta_sat = 0.0f;
+    }
+
+    // dk_smc = pid->smc.kj_smc * s_delta_sat + pid->smc.ki_smc * s_minus_delta_sat; // fabsf(s_smc)
+    dk_smc = pid->smc.ki_smc * s_minus_delta_sat; // fabsf(s_smc)
+    // dk_smc = pid->smc.kj_smc * s_delta_sat; // fabsf(s_smc)
+    pid->smc.k_smc += dk_smc * pid->dt;
+
+    if (pid->smc.k_smc < pid->smc.k_min_smc){
+      pid->smc.k_smc = pid->smc.k_min_smc;
+    } else if (pid->smc.k_smc > pid->smc.k_max_smc){
+      pid->smc.k_smc = pid->smc.k_max_smc;
+    }
+
+    pid->smc.outPID = output;
+
+    if (~use_superTwist){
+      pid->smc.outSMC = pid->smc.k_smc*s_smc_sat;
+    }
+
+
+    // // Super Twist Part
+    float s_smc_sgn;
+
+    if (s_smc < 0.0f) {
+      s_smc_sgn = -1.0f;
+    } else {
+      s_smc_sgn = 1.0f;
+    }
+
+    if (use_superTwist){
+      pid->smc.integ_st_smc += s_smc_sgn * pid->dt;
+      // Constrain the integral (unless the iLimit is zero)
+      float integral_term_st = pid->smc.kj_smc * pid->smc.integ_st_smc;
+      if(pid->smc.i_st_limit_smc != 0)
+      {
+        integral_term_st = constrain(integral_term_st, -pid->smc.i_st_limit_smc, pid->smc.i_st_limit_smc);
+      }
+      pid->smc.outSMC = pid->smc.ki_smc * sqrtf(fabsf(s_smc)) * s_smc_sgn + integral_term_st;
+    }
+
+    if (is_PD_ASMC){
+      output += pid->smc.outSMC;
+    }
   }
 
-  float s_smc = ew + 0*lambda_smc*er;
-  pid->smc.s_smc = s_smc;
-
-  // Saturation
-  float s_smc_sat;
-
-  if (s_smc/sigma_smc < -1.0f) {
-   s_smc_sat = -1.0f;
-  } else if(s_smc/sigma_smc > 1.0f) {
-   s_smc_sat = 1.0f;
-  } else {
-   s_smc_sat = s_smc/sigma_smc;
-  }
-
-  // if (s_smc < 0.0f) {
-  //   s_smc_sat = -1.0f;
-  // } else {
-  //   s_smc_sat = 1.0f;
-  // }
-
-  //if (pid->smc.axis == 2) {
-  //  s_smc_sat = -s_smc_sat;
-  //} 
-
-  if (pid->smc.axis == 3) {
-    s_smc_sat = 0.0f;
-  }
-
-
-  float dk_smc, s_delta, s_delta_sat;
-  s_delta = fabsf(s_smc) - pid->smc.delta_smc;
-
-  if (s_delta < 0.0f) {
-    s_delta_sat = -1.0f;
-  } else {
-    s_delta_sat = 1.0f;
-  }
-
-  dk_smc = pid->smc.ki_smc * fabsf(s_smc) * s_delta_sat;
-  pid->smc.k_smc += dk_smc * pid->dt;
-
-  if (pid->smc.k_smc < 0){
-    pid->smc.k_smc = 0;
-  } else if (pid->smc.k_smc > 20000){
-    pid->smc.k_smc = 20000;
-  }
-
-  pid->smc.outSMC = pid->smc.k_smc*s_smc_sat;
-  pid->smc.outPID = output;
-
-  output += pid->smc.outSMC;
-  
   #if CONFIG_CONTROLLER_PID_FILTER_ALL
     //filter complete output instead of only D component to compensate for increased noise from increased barometer influence
     if (pid->enableDFilter)
@@ -414,3 +473,18 @@ void filterReset(PidObject* pid, const float samplingRate, const float cutoffFre
     lpf2pInit(&pid->dFilter, samplingRate, cutoffFreq);
   }
 }
+
+
+PARAM_GROUP_START(smc)
+
+/**
+ * @brief Boudary layer for the SMC PID pitch rate controller
+ */
+PARAM_ADD(PARAM_UINT8, is_PD_ASMC, &is_PD_ASMC)
+
+/**
+ * @brief Boudary layer for the SMC PID pitch rate controller
+ */
+PARAM_ADD(PARAM_UINT8, use_superTwist, &use_superTwist)
+PARAM_GROUP_STOP(smc)
+

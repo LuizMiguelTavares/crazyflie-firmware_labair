@@ -56,6 +56,9 @@ static float psi_prev = 0.0f;
 static float psi_unwrapped = 0.0f;
 static uint8_t psi_init = 0;
 
+static float R13_error_ = 0;
+static float R23_error_ = 0;
+
 #ifndef PI_
 #define PI_ 3.14159265358979323846f
 #endif
@@ -205,10 +208,13 @@ void controllerPid(control_t *control, const setpoint_t *setpoint,
 
       float R13_error = k_phi*(R13d - R13);
       float R23_error = k_theta*(R23d - R23);
+      
+      R13_error_ = R13_error;
+      R23_error_ = R23_error;
 
       er_phi = (R13_error*R21 + R23_error*(-R11))/R33;
       er_theta = (R13_error*R22 + R23_error*(-R12))/R33;
-      er_psi = -sinf(phi)*sensors->gyro.y*deg2rad + R33*(k_psi*(0 - psi)); // Psi desejado está em 0!
+      // er_psi = -sinf(phi)*sensors->gyro.y*deg2rad + R33*(k_psi*(0 - psi)); // Psi desejado está em 0!
 
       if (er_phi > sat_roll) {
         er_phi = sat_roll;
@@ -221,16 +227,16 @@ void controllerPid(control_t *control, const setpoint_t *setpoint,
       } else if (er_theta < -sat_pitch) {
         er_theta = -sat_pitch;
       }
-
-      if (er_psi > sat_yaw) {
-        er_psi = sat_yaw;
-      } else if (er_psi < -sat_yaw) {
-        er_psi = -sat_yaw;
-      }
+     
+      // if (er_psi > sat_yaw) {
+      //   er_psi = sat_yaw;
+      // } else if (er_psi < -sat_yaw) {
+      //   er_psi = -sat_yaw;
+      // }
 
       er_phi = er_phi*rad2deg;
       er_theta = er_theta*rad2deg;
-      er_psi = er_psi*rad2deg;
+      // er_psi = er_psi*rad2deg;
     }
   }
 
@@ -398,6 +404,9 @@ LOG_ADD(LOG_FLOAT, er_psi, &er_psi)
 LOG_ADD(LOG_FLOAT, phi_filt, &phi_filt)
 LOG_ADD(LOG_FLOAT, theta_filt, &theta_filt)
 LOG_ADD(LOG_FLOAT, psi_filt, &psi_filt)
+
+LOG_ADD(LOG_FLOAT, R13_error, &R13_error_)
+LOG_ADD(LOG_FLOAT, R23_error, &R23_error_)
 LOG_GROUP_STOP(smc)
 
 /**

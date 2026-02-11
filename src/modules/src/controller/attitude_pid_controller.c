@@ -64,6 +64,12 @@ PidObject pidRollRate = {
   .smc.sigma_smc = SMC_ROLL_SIGMA,
   .smc.ki_smc = SMC_ROLL_KI,
   .smc.delta_smc = SMC_ROLL_DELTA,
+  .smc.kj_smc = SMC_ROLL_KJ,
+  .smc.sigma_sdelta_smc = SMC_ROLL_SIGMA_SDELTA,
+  .smc.k_min_smc = SMC_ROLL_K_MIN,
+  .smc.k_max_smc = SMC_ROLL_K_MAX,
+  .smc.integ_st_smc = SMC_ROLL_INTEG_ST,
+  .smc.i_st_limit_smc = SMC_ROLL_I_LIMIT_ST,
 };
 
 PidObject pidPitchRate = {
@@ -76,6 +82,12 @@ PidObject pidPitchRate = {
   .smc.sigma_smc = SMC_PITCH_SIGMA,
   .smc.ki_smc = SMC_PITCH_KI,
   .smc.delta_smc = SMC_PITCH_DELTA,
+  .smc.kj_smc = SMC_PITCH_KJ,
+  .smc.sigma_sdelta_smc = SMC_PITCH_SIGMA_SDELTA,
+  .smc.k_min_smc = SMC_PITCH_K_MIN,
+  .smc.k_max_smc = SMC_PITCH_K_MAX,
+  .smc.integ_st_smc = SMC_PITCH_INTEG_ST,
+  .smc.i_st_limit_smc = SMC_PITCH_I_LIMIT_ST,
 };
 
 PidObject pidYawRate = {
@@ -88,6 +100,12 @@ PidObject pidYawRate = {
   .smc.sigma_smc = SMC_YAW_SIGMA,
   .smc.ki_smc = SMC_YAW_KI,
   .smc.delta_smc = SMC_YAW_DELTA,
+  .smc.kj_smc = SMC_YAW_KJ,
+  .smc.sigma_sdelta_smc = SMC_YAW_SIGMA_SDELTA,
+  .smc.k_min_smc = SMC_YAW_K_MIN,
+  .smc.k_max_smc = SMC_YAW_K_MAX,
+  .smc.integ_st_smc = SMC_YAW_INTEG_ST,
+  .smc.i_st_limit_smc = SMC_YAW_I_LIMIT_ST,
 };
 
 PidObject pidRoll = {
@@ -143,15 +161,18 @@ void attitudeControllerInit(const float updateDt)
   //TODO: get parameters from configuration manager instead - now (partly) implemented
   pidInit(&pidRollRate,  0, pidRollRate.kp,  pidRollRate.ki,  pidRollRate.kd,
        pidRollRate.kff,  updateDt, ATTITUDE_RATE, omxFiltCutoff, rateFiltEnable);
-  smcInit(&pidRollRate, pidRollRate.smc.k_smc, pidRollRate.smc.lambda_smc, pidRollRate.smc.sigma_smc, pidRollRate.smc.ki_smc, pidRollRate.smc.delta_smc, 1);
+  smcInit(&pidRollRate, pidRollRate.smc.k_smc, pidRollRate.smc.lambda_smc, pidRollRate.smc.sigma_smc, pidRollRate.smc.ki_smc, pidRollRate.smc.delta_smc,
+     pidRollRate.smc.kj_smc, pidRollRate.smc.sigma_sdelta_smc, 1);
 
   pidInit(&pidPitchRate, 0, pidPitchRate.kp, pidPitchRate.ki, pidPitchRate.kd,
        pidPitchRate.kff, updateDt, ATTITUDE_RATE, omyFiltCutoff, rateFiltEnable);
-  smcInit(&pidPitchRate, pidPitchRate.smc.k_smc, pidPitchRate.smc.lambda_smc, pidPitchRate.smc.sigma_smc, pidPitchRate.smc.ki_smc, pidPitchRate.smc.delta_smc, 2);
+  smcInit(&pidPitchRate, pidPitchRate.smc.k_smc, pidPitchRate.smc.lambda_smc, pidPitchRate.smc.sigma_smc, pidPitchRate.smc.ki_smc, pidPitchRate.smc.delta_smc,
+     pidPitchRate.smc.kj_smc, pidPitchRate.smc.sigma_sdelta_smc, 2);
   
   pidInit(&pidYawRate,   0, pidYawRate.kp,   pidYawRate.ki,   pidYawRate.kd,
        pidYawRate.kff,   updateDt, ATTITUDE_RATE, omzFiltCutoff, rateFiltEnable);
-  smcInit(&pidYawRate, pidYawRate.smc.k_smc, pidYawRate.smc.lambda_smc, pidYawRate.smc.sigma_smc, pidYawRate.smc.ki_smc, pidYawRate.smc.delta_smc, 3);
+  smcInit(&pidYawRate, pidYawRate.smc.k_smc, pidYawRate.smc.lambda_smc, pidYawRate.smc.sigma_smc, pidYawRate.smc.ki_smc, pidYawRate.smc.delta_smc,
+     pidYawRate.smc.kj_smc, pidYawRate.smc.sigma_sdelta_smc, 3);
   
   pidSetIntegralLimit(&pidRollRate,  PID_ROLL_RATE_INTEGRATION_LIMIT);
   pidSetIntegralLimit(&pidPitchRate, PID_PITCH_RATE_INTEGRATION_LIMIT);
@@ -412,6 +433,19 @@ LOG_ADD(LOG_FLOAT, pitch_k_smc, &pidPitchRate.smc.k_smc)
  * @brief Derivative output roll rate
  */
 LOG_ADD(LOG_FLOAT, yaw_k_smc, &pidYawRate.smc.k_smc)
+
+/**
+ * @brief Proportional output roll rate
+ */
+LOG_ADD(LOG_FLOAT, roll_integ_st, &pidRollRate.smc.integ_st_smc)
+/**
+ * @brief Integral output roll rate
+ */
+LOG_ADD(LOG_FLOAT, pitch_integ_st, &pidPitchRate.smc.integ_st_smc)
+/**
+ * @brief Derivative output roll rate
+ */
+LOG_ADD(LOG_FLOAT, yaw_integ_st, &pidYawRate.smc.integ_st_smc)
 LOG_GROUP_STOP(pid_rate)
 
 /**
@@ -617,4 +651,69 @@ PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, pitch_delta_smc, &pidPitchRate.smc.del
  * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
  */
 PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, yaw_delta_smc, &pidYawRate.smc.delta_smc)
+
+/**
+ * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, roll_kj_smc, &pidRollRate.smc.kj_smc)
+/**
+ * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, pitch_kj_smc, &pidPitchRate.smc.kj_smc)
+/**
+ * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, yaw_kj_smc, &pidYawRate.smc.kj_smc)
+
+/**
+ * @brief Boudary layer for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, roll_sdelta, &pidRollRate.smc.sigma_sdelta_smc)
+/**
+ * @brief Boudary layer for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, pitch_sdelta, &pidPitchRate.smc.sigma_sdelta_smc)
+/**
+ * @brief Boudary layer for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, yaw_sdelta, &pidYawRate.smc.sigma_sdelta_smc)
+
+/**
+ * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, roll_k_min_smc, &pidRollRate.smc.k_min_smc)
+/**
+ * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, pitch_k_min_smc, &pidPitchRate.smc.k_min_smc)
+/**
+ * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, yaw_k_min_smc, &pidYawRate.smc.k_min_smc)
+
+/**
+ * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, roll_k_max_smc, &pidRollRate.smc.k_max_smc)
+/**
+ * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, pitch_k_max_smc, &pidPitchRate.smc.k_max_smc)
+/**
+ * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, yaw_k_max_smc, &pidYawRate.smc.k_max_smc)
+
+/**
+ * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, roll_i_lim_st, &pidRollRate.smc.i_st_limit_smc)
+/**
+ * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, pitch_i_lim_st, &pidPitchRate.smc.i_st_limit_smc)
+/**
+ * @brief Uncertainty magnitude gain for the SMC PID roll rate controller
+ */
+PARAM_ADD(PARAM_FLOAT | PARAM_PERSISTENT, yaw_i_lim_st, &pidYawRate.smc.i_st_limit_smc)
 PARAM_GROUP_STOP(pid_rate)

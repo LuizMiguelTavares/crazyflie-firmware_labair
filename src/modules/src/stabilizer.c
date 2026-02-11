@@ -878,3 +878,7 @@ LOG_ADD(LOG_INT32, m3req, &motorThrustBatCompUncapped.motors.m3)
  */
 LOG_ADD(LOG_INT32, m4req, &motorThrustBatCompUncapped.motors.m4)
 LOG_GROUP_STOP(motor)
+
+LOG_GROUP_START(test)
+LOG_ADD(LOG_FLOAT, thrust, &setpoint.thrust)
+LOG_GROUP_STOP(test)

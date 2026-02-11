@@ -45,6 +45,12 @@ typedef struct
   float s_smc;
   float ki_smc;
   float delta_smc;
+  float kj_smc;
+  float sigma_sdelta_smc;
+  float k_min_smc;
+  float k_max_smc;
+  float integ_st_smc;
+  float i_st_limit_smc;
 } SMC;
 
 typedef struct
@@ -98,9 +104,11 @@ typedef struct
  * @param[in] sigma_smc   Boundary layer size
  * @param[in] ki_smc   Adaptive SMC gain
  * @param[in] delta_smc   Adaptive SMC gain
+ * @param[in] kj_smc   Adaptive SMC gain
+ * @param[in] sigma_sdelta_smc   Boundary layer size
  */
 void smcInit(PidObject* pid, const float k_smc, const float lambda_smc,
-             const float sigma_smc, const float ki_smc, const float delta_smc, const int axis_smc);
+             const float sigma_smc, const float ki_smc, const float delta_smc, const float kj_smc, const float sigma_sdelta_smc, const int axis_smc);
 
 /**
  * Set the integral limit for this PID in deg.
